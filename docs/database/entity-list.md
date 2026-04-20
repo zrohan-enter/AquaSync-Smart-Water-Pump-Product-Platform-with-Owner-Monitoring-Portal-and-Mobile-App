@@ -1,0 +1,11 @@
+# Entity List
+- users
+- products
+- orders
+- devices
+- device_activations
+- telemetry_logs
+- motor_events
+- alerts
+- maintenance_requests
+- notifications
