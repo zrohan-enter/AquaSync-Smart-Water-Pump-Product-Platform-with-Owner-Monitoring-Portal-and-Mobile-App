@@ -11,13 +11,6 @@ const admin = createAdminClient(supabaseUrl, serviceRoleKey, {
   },
 });
 
-function slugifyProductName(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)+/g, "");
-}
-
 function generateActivationCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let block = "";
@@ -104,7 +97,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 1) find or create auth user
+    // 1) Resolve product from database
+    let productId: string | null = null;
+    let resolvedProductName = productName;
+    let resolvedProductPrice = price;
+
+    const productLookup = await admin
+      .from("products")
+      .select("id, name, model, price")
+      .or(`name.eq.${productName}${modelCode ? `,model.eq.${modelCode}` : ""}`)
+      .limit(1)
+      .maybeSingle();
+
+    if (productLookup.error) {
+      return NextResponse.json(
+        { error: productLookup.error.message },
+        { status: 500 },
+      );
+    }
+
+    if (!productLookup.data) {
+      return NextResponse.json(
+        { error: "Selected product was not found in the catalog." },
+        { status: 404 },
+      );
+    }
+
+    productId = productLookup.data.id;
+    resolvedProductName = productLookup.data.name ?? productName;
+    resolvedProductPrice =
+      productLookup.data.price != null
+        ? `৳${Number(productLookup.data.price).toLocaleString()}`
+        : price;
+
+    // 2) Find or create auth user
     let ownerId: string | null = null;
 
     const existingUsers = await admin.auth.admin.listUsers({
@@ -152,7 +178,14 @@ export async function POST(request: NextRequest) {
       ownerId = createdUser.data.user.id;
     }
 
-    // 2) upsert owner profile
+    if (!ownerId) {
+      return NextResponse.json(
+        { error: "Could not resolve owner account." },
+        { status: 500 },
+      );
+    }
+
+    // 3) Upsert owner profile
     const profileUpsert = await admin.from("profiles").upsert(
       {
         id: ownerId,
@@ -173,23 +206,44 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 3) create purchased device
-    const activationCode = generateActivationCode();
+    // 4) Create order
+    const productNumericPrice =
+      productLookup.data.price != null
+        ? Number(productLookup.data.price)
+        : Number(String(price).replace(/[^\d.]/g, "")) || 0;
+
+    const orderInsert = await admin
+      .from("orders")
+      .insert({
+        owner_id: ownerId,
+        product_id: productId,
+        order_status: "PAID",
+        total_amount: productNumericPrice,
+      })
+      .select()
+      .single();
+
+    if (orderInsert.error || !orderInsert.data) {
+      return NextResponse.json(
+        { error: orderInsert.error?.message || "Failed to create order." },
+        { status: 500 },
+      );
+    }
+
+    const order = orderInsert.data;
+
+    // 5) Create device (NO activation_code here)
     const deviceUuid = generateDeviceUuid();
-    const firmwareVersion = "v1.0.0";
-    const installationLocation = address;
 
     const deviceInsert = await admin
       .from("devices")
       .insert({
         owner_id: ownerId,
-        product_name: productName,
-        model_code: modelCode || slugifyProductName(productName).toUpperCase(),
+        product_id: productId,
         device_uuid: deviceUuid,
-        activation_code: activationCode,
         activation_status: "PENDING",
-        installation_location: installationLocation,
-        firmware_version: firmwareVersion,
+        installation_location: address,
+        firmware_version: "1.0.0",
       })
       .select()
       .single();
@@ -201,15 +255,44 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const device = deviceInsert.data;
+
+    // 6) Create activation code in device_activations
+    const activationCode = generateActivationCode();
+
+    const activationInsert = await admin
+      .from("device_activations")
+      .insert({
+        device_id: device.id,
+        order_id: order.id,
+        activation_code: activationCode,
+        is_used: false,
+        assigned_to_user_id: ownerId,
+      })
+      .select()
+      .single();
+
+    if (activationInsert.error || !activationInsert.data) {
+      return NextResponse.json(
+        {
+          error:
+            activationInsert.error?.message ||
+            "Failed to create activation record.",
+        },
+        { status: 500 },
+      );
+    }
+
     return NextResponse.json({
       success: true,
-      productName,
-      price,
+      productName: resolvedProductName,
+      price: resolvedProductPrice,
       ownerEmail: email,
       ownerId,
+      orderId: order.id,
       activationCode,
       deviceUuid,
-      deviceId: deviceInsert.data.id,
+      deviceId: device.id,
       message: "Purchase completed successfully.",
     });
   } catch (error) {
