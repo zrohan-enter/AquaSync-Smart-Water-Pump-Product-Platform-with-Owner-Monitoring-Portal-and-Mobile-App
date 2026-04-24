@@ -1,288 +1,222 @@
-﻿import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+﻿import { NextRequest, NextResponse } from "next/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+const admin = createAdminClient(supabaseUrl, serviceRoleKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
+});
+
+function slugifyProductName(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)+/g, "");
+}
 
 function generateActivationCode() {
-  return "AC-" + Math.random().toString(36).substring(2, 10).toUpperCase();
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let block = "";
+  for (let i = 0; i < 8; i++) {
+    block += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return `AC-${block}`;
 }
 
 function generateDeviceUuid() {
-  return "AQUA-" + crypto.randomUUID().toUpperCase();
+  return `AQUA-${crypto.randomUUID().toUpperCase()}`;
 }
 
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
+function normalizeBangladeshPhone(input: string) {
+  const raw = input.trim().replace(/[^\d+]/g, "");
+
+  if (/^\+8801\d{9}$/.test(raw)) return raw;
+  if (/^8801\d{9}$/.test(raw)) return `+${raw}`;
+  if (/^01\d{9}$/.test(raw)) return `+88${raw}`;
+
+  return null;
 }
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const body = await req.json();
+    const body = await request.json();
 
-    const {
-      productId,
-      productName,
-      userId,
-      ownerEmail,
-      password,
-      phoneNumber,
-      address,
-      fullName,
-      postalCode,
-      profileImageUrl,
-    } = body;
+    const productName = String(body.productName || "").trim();
+    const price = String(body.price || "").trim();
+    const modelCode = String(body.modelCode || "").trim();
+    const email = String(body.email || "")
+      .trim()
+      .toLowerCase();
+    const password = String(body.password || "");
+    const fullName = String(body.fullName || "").trim();
+    const phoneNumberRaw = String(body.phoneNumber || "").trim();
+    const address = String(body.address || "").trim();
+    const postalCode = String(body.postalCode || "").trim();
 
-    if (!productId) {
+    if (!productName) {
       return NextResponse.json(
-        { error: "Product ID is required." },
+        { error: "Product name is required." },
         { status: 400 },
       );
     }
 
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    );
-
-    const { data: product, error: productError } = await supabase
-      .from("products")
-      .select("id, name, model, price")
-      .eq("id", productId)
-      .single();
-
-    if (productError || !product) {
+    if (!email) {
       return NextResponse.json(
-        { error: "Product not found." },
-        { status: 404 },
+        { error: "Email is required." },
+        { status: 400 },
       );
     }
 
-    let resolvedOwnerId: string | null = null;
-    let resolvedOwnerEmail: string | null = null;
+    if (!password || password.length < 6) {
+      return NextResponse.json(
+        { error: "Password must be at least 6 characters." },
+        { status: 400 },
+      );
+    }
 
-    // CASE 1: Logged-in owner already exists
-    if (userId) {
-      const { data: authUserResult, error: authUserError } =
-        await supabase.auth.admin.getUserById(userId);
+    if (!phoneNumberRaw) {
+      return NextResponse.json(
+        { error: "Phone number is required." },
+        { status: 400 },
+      );
+    }
 
-      if (authUserError || !authUserResult?.user) {
-        return NextResponse.json(
-          { error: "Authenticated owner account not found." },
-          { status: 404 },
-        );
-      }
+    if (!address) {
+      return NextResponse.json(
+        { error: "Address is required." },
+        { status: 400 },
+      );
+    }
 
-      resolvedOwnerId = authUserResult.user.id;
-      resolvedOwnerEmail = authUserResult.user.email ?? null;
+    const phoneNumber = normalizeBangladeshPhone(phoneNumberRaw);
 
-      const { error: profileUpsertError } = await supabase
-        .from("profiles")
-        .upsert(
-          [
-            {
-              id: resolvedOwnerId,
-              email: resolvedOwnerEmail,
-              full_name: fullName ?? null,
-              phone_number: phoneNumber ?? null,
-              address: address ?? null,
-              postal_code: postalCode ?? null,
-              profile_image_url: profileImageUrl ?? null,
-            },
-          ],
-          { onConflict: "id" },
-        );
+    if (!phoneNumber) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid Bangladesh mobile number. Use format like 01814511111.",
+        },
+        { status: 400 },
+      );
+    }
 
-      if (profileUpsertError) {
-        return NextResponse.json(
-          { error: profileUpsertError.message },
-          { status: 500 },
-        );
-      }
+    // 1) find or create auth user
+    let ownerId: string | null = null;
+
+    const existingUsers = await admin.auth.admin.listUsers({
+      page: 1,
+      perPage: 1000,
+    });
+
+    if (existingUsers.error) {
+      return NextResponse.json(
+        { error: existingUsers.error.message },
+        { status: 500 },
+      );
+    }
+
+    const matchedUser = existingUsers.data.users.find(
+      (u) => (u.email || "").toLowerCase() === email,
+    );
+
+    if (matchedUser) {
+      ownerId = matchedUser.id;
     } else {
-      // CASE 2: Buyer is not logged in -> create or resolve owner
-      if (!ownerEmail || !phoneNumber || !address) {
+      const createdUser = await admin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        phone: phoneNumber,
+        user_metadata: {
+          full_name: fullName || null,
+          phone_number: phoneNumber,
+          address,
+          postal_code: postalCode || null,
+        },
+      });
+
+      if (createdUser.error || !createdUser.data.user) {
         return NextResponse.json(
           {
             error:
-              "For guest purchase, ownerEmail, phoneNumber, and address are required.",
+              createdUser.error?.message || "Failed to create owner account.",
           },
-          { status: 400 },
-        );
-      }
-
-      const normalizedEmail = normalizeEmail(ownerEmail);
-
-      // Try existing profile first
-      const { data: existingProfile, error: profileLookupError } =
-        await supabase
-          .from("profiles")
-          .select("id, email")
-          .eq("email", normalizedEmail)
-          .maybeSingle();
-
-      if (profileLookupError) {
-        return NextResponse.json(
-          { error: profileLookupError.message },
           { status: 500 },
         );
       }
 
-      if (existingProfile) {
-        resolvedOwnerId = existingProfile.id;
-        resolvedOwnerEmail = existingProfile.email;
-      } else {
-        if (!password) {
-          return NextResponse.json(
-            {
-              error:
-                "Password is required when creating a new owner account during purchase.",
-            },
-            { status: 400 },
-          );
-        }
-
-        const { data: createdUserData, error: createUserError } =
-          await supabase.auth.admin.createUser({
-            email: normalizedEmail,
-            password,
-            email_confirm: true,
-            phone: phoneNumber,
-            user_metadata: {
-              full_name: fullName ?? null,
-              phone_number: phoneNumber,
-              address,
-              postal_code: postalCode ?? null,
-              profile_image_url: profileImageUrl ?? null,
-            },
-          });
-
-        if (createUserError || !createdUserData.user) {
-          return NextResponse.json(
-            {
-              error:
-                createUserError?.message ||
-                "Failed to create owner account during purchase.",
-            },
-            { status: 500 },
-          );
-        }
-
-        resolvedOwnerId = createdUserData.user.id;
-        resolvedOwnerEmail = createdUserData.user.email ?? normalizedEmail;
-      }
-
-      const { error: profileUpsertError } = await supabase
-        .from("profiles")
-        .upsert(
-          [
-            {
-              id: resolvedOwnerId,
-              email: resolvedOwnerEmail,
-              full_name: fullName ?? null,
-              phone_number: phoneNumber,
-              address,
-              postal_code: postalCode ?? null,
-              profile_image_url: profileImageUrl ?? null,
-            },
-          ],
-          { onConflict: "id" },
-        );
-
-      if (profileUpsertError) {
-        return NextResponse.json(
-          { error: profileUpsertError.message },
-          { status: 500 },
-        );
-      }
+      ownerId = createdUser.data.user.id;
     }
 
-    if (!resolvedOwnerId) {
+    // 2) upsert owner profile
+    const profileUpsert = await admin.from("profiles").upsert(
+      {
+        id: ownerId,
+        email,
+        full_name: fullName || null,
+        phone_number: phoneNumber,
+        address,
+        postal_code: postalCode || null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" },
+    );
+
+    if (profileUpsert.error) {
       return NextResponse.json(
-        { error: "Could not resolve owner for this purchase." },
+        { error: profileUpsert.error.message },
         { status: 500 },
       );
     }
 
-    const { data: order, error: orderError } = await supabase
-      .from("orders")
-      .insert([
-        {
-          owner_id: resolvedOwnerId,
-          product_id: productId,
-          order_status: "PAID",
-          total_amount: product.price ?? 0,
-        },
-      ])
-      .select()
-      .single();
-
-    if (orderError || !order) {
-      return NextResponse.json(
-        { error: orderError?.message || "Failed to create order." },
-        { status: 500 },
-      );
-    }
-
-    const deviceUuid = generateDeviceUuid();
-
-    const { data: device, error: deviceError } = await supabase
-      .from("devices")
-      .insert([
-        {
-          device_uuid: deviceUuid,
-          product_id: productId,
-          owner_id: resolvedOwnerId,
-          activation_status: "PENDING_ACTIVATION",
-          firmware_version: "1.0.0",
-          installation_location: address ?? null,
-        },
-      ])
-      .select()
-      .single();
-
-    if (deviceError || !device) {
-      return NextResponse.json(
-        {
-          error: deviceError?.message || "Failed to create device.",
-        },
-        { status: 500 },
-      );
-    }
-
+    // 3) create purchased device
     const activationCode = generateActivationCode();
+    const deviceUuid = generateDeviceUuid();
+    const firmwareVersion = "v1.0.0";
+    const installationLocation = address;
 
-    const { error: activationError } = await supabase
-      .from("device_activations")
-      .insert([
-        {
-          device_id: device.id,
-          order_id: order.id,
-          activation_code: activationCode,
-          is_used: false,
-          assigned_to_user_id: resolvedOwnerId,
-        },
-      ]);
+    const deviceInsert = await admin
+      .from("devices")
+      .insert({
+        owner_id: ownerId,
+        product_name: productName,
+        model_code: modelCode || slugifyProductName(productName).toUpperCase(),
+        device_uuid: deviceUuid,
+        activation_code: activationCode,
+        activation_status: "PENDING",
+        installation_location: installationLocation,
+        firmware_version: firmwareVersion,
+      })
+      .select()
+      .single();
 
-    if (activationError) {
+    if (deviceInsert.error || !deviceInsert.data) {
       return NextResponse.json(
-        { error: activationError.message },
+        { error: deviceInsert.error?.message || "Failed to create device." },
         { status: 500 },
       );
     }
 
     return NextResponse.json({
       success: true,
-      message: `Purchase successful for ${productName ?? product.name}`,
-      ownerId: resolvedOwnerId,
-      ownerEmail: resolvedOwnerEmail,
-      orderId: order.id,
-      deviceId: device.id,
-      deviceUuid,
+      productName,
+      price,
+      ownerEmail: email,
+      ownerId,
       activationCode,
+      deviceUuid,
+      deviceId: deviceInsert.data.id,
+      message: "Purchase completed successfully.",
     });
   } catch (error) {
     console.error("Purchase route error:", error);
 
     return NextResponse.json(
-      { error: "Internal server error during purchase simulation." },
+      { error: "Internal server error during purchase." },
       { status: 500 },
     );
   }
