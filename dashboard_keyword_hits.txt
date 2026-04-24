@@ -1,0 +1,64 @@
+﻿KEYWORD SEARCH GENERATED: 04/22/2026 14:34:48
+ROOT: E:\AquaSync
+
+============================================================
+
+KEYWORD: System Dashboard
+--------------------------------------------------------------------------------
+web\app\page.tsx:178: System Dashboard
+
+
+KEYWORD: Export CSV
+--------------------------------------------------------------------------------
+web\app\page.tsx:188: Export CSV
+
+
+KEYWORD: Sign Out
+--------------------------------------------------------------------------------
+web\app\page.tsx:194: Sign Out
+
+
+KEYWORD: Current Capacity
+--------------------------------------------------------------------------------
+web\app\page.tsx:230: <h2 className="text-3xl font-black mb-8">Current Capacity</h2>
+
+
+KEYWORD: Digital Twin Visualizer
+--------------------------------------------------------------------------------
+web\app\page.tsx:223: {/* DIGITAL TWIN VISUALIZER - The Topper Move */}
+web\app\page.tsx:228: Digital Twin Visualizer
+
+
+KEYWORD: Run Self-Check
+--------------------------------------------------------------------------------
+web\app\page.tsx:318: Run Self-Check
+
+
+KEYWORD: Cloud Status
+--------------------------------------------------------------------------------
+web\app\page.tsx:163: Cloud Status
+
+
+KEYWORD: AQUASYNC-DEMO-001
+--------------------------------------------------------------------------------
+server\src\simulator\engine.js:5: deviceUuid: "AQUASYNC-DEMO-001",
+server\src\simulator\engine.js:18: console.error("Demo device not found in DB. Ensure AQUASYNC-DEMO-001 exists.");
+web\app\page.tsx:86: .eq("device_uuid", "AQUASYNC-DEMO-001")
+web\app\page.tsx:97: No Digital Twin linked to <b>AQUASYNC-DEMO-001</b>. Please complete
+
+
+KEYWORD: OwnerDashboardClient
+--------------------------------------------------------------------------------
+web\app\portal\dashboard\page.tsx:2: import OwnerDashboardClient from "@/components/OwnerDashboardClient";
+web\app\portal\dashboard\page.tsx:49: <OwnerDashboardClient
+web\components\OwnerDashboardClient.tsx:66: export default function OwnerDashboardClient({ initialData }: { initialData: DashboardPayload }) {
+
+
+KEYWORD: app/api/dashboard
+--------------------------------------------------------------------------------
+
+
+KEYWORD: app/portal/dashboard
+--------------------------------------------------------------------------------
+
+
