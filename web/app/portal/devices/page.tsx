@@ -16,13 +16,27 @@ type DeviceRow = {
   product_id?: string | null;
 };
 
+type ActivationRow = {
+  device_id: string;
+  activation_code: string;
+  is_used: boolean | null;
+  assigned_to_user_id: string | null;
+  created_at: string;
+};
+
+type DeviceWithActivation = DeviceRow & {
+  activation_code?: string | null;
+  activation_is_used?: boolean | null;
+};
+
 export default function DevicesPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
-  const [devices, setDevices] = useState<DeviceRow[]>([]);
+  const [devices, setDevices] = useState<DeviceWithActivation[]>([]);
   const [userEmail, setUserEmail] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -46,7 +60,7 @@ export default function DevicesPage() {
 
         setUserEmail(user.email ?? "");
 
-        const { data, error } = await supabaseBrowser
+        const { data: deviceData, error: deviceError } = await supabaseBrowser
           .from("devices")
           .select(
             "id, device_uuid, activation_status, installation_location, firmware_version, created_at, owner_id, product_id",
@@ -54,15 +68,62 @@ export default function DevicesPage() {
           .eq("owner_id", user.id)
           .order("created_at", { ascending: false });
 
-        if (error) {
-          setErrorMessage(error.message);
+        if (deviceError) {
+          setErrorMessage(deviceError.message);
           return;
         }
 
-        setDevices((data as DeviceRow[]) ?? []);
+        const baseDevices = (deviceData as DeviceRow[]) ?? [];
+
+        if (baseDevices.length === 0) {
+          setDevices([]);
+          return;
+        }
+
+        const deviceIds = baseDevices.map((device) => device.id);
+
+        const { data: activationData, error: activationError } =
+          await supabaseBrowser
+            .from("device_activations")
+            .select(
+              "device_id, activation_code, is_used, assigned_to_user_id, created_at",
+            )
+            .in("device_id", deviceIds)
+            .order("created_at", { ascending: false });
+
+        if (activationError) {
+          setErrorMessage(activationError.message);
+          return;
+        }
+
+        const activationMap = new Map<string, ActivationRow>();
+
+        ((activationData as ActivationRow[]) ?? []).forEach((row) => {
+          if (!activationMap.has(row.device_id)) {
+            activationMap.set(row.device_id, row);
+          }
+        });
+
+        const mergedDevices: DeviceWithActivation[] = baseDevices.map(
+          (device) => {
+            const activation = activationMap.get(device.id);
+
+            return {
+              ...device,
+              activation_code: activation?.activation_code ?? null,
+              activation_is_used: activation?.is_used ?? null,
+            };
+          },
+        );
+
+        if (mounted) {
+          setDevices(mergedDevices);
+        }
       } catch (error) {
         console.error("Failed to load devices:", error);
-        setErrorMessage("Failed to load your devices.");
+        if (mounted) {
+          setErrorMessage("Failed to load your devices.");
+        }
       } finally {
         if (mounted) setLoading(false);
       }
@@ -74,6 +135,17 @@ export default function DevicesPage() {
       mounted = false;
     };
   }, [router]);
+
+  async function handleCopy(code: string) {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedCode(code);
+      setTimeout(() => setCopiedCode(null), 1800);
+    } catch (error) {
+      console.error("Copy failed:", error);
+      alert("Failed to copy activation code.");
+    }
+  }
 
   if (loading) {
     return (
@@ -141,7 +213,7 @@ export default function DevicesPage() {
         ) : null}
 
         {devices.length === 0 ? (
-          <div className="rounded-[2.5rem] border border-slate-200 bg-white p-12 shadow-sm text-center">
+          <div className="rounded-[2.5rem] border border-slate-200 bg-white p-12 text-center shadow-sm">
             <h2 className="mb-4 text-4xl font-black">No devices linked yet</h2>
             <p className="mx-auto mb-8 max-w-2xl text-lg leading-8 text-slate-600">
               Your owner account is active, but there are no AquaSync devices
@@ -184,64 +256,102 @@ export default function DevicesPage() {
             </div>
 
             <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-              {devices.map((device) => (
-                <div
-                  key={device.id}
-                  className="rounded-[2.25rem] border border-slate-200 bg-white p-8 shadow-sm transition hover:-translate-y-1 hover:shadow-md"
-                >
-                  <div className="mb-4 flex items-center justify-between gap-3">
-                    <span
-                      className={`rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] ${
-                        device.activation_status === "ACTIVE"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-amber-100 text-amber-700"
-                      }`}
-                    >
-                      {device.activation_status ?? "UNKNOWN"}
-                    </span>
+              {devices.map((device) => {
+                const isInactive = device.activation_status !== "ACTIVE";
+                const code = device.activation_code ?? null;
 
-                    <span className="text-sm font-semibold text-slate-400">
-                      {new Date(device.created_at).toLocaleDateString()}
-                    </span>
-                  </div>
+                return (
+                  <div
+                    key={device.id}
+                    className="rounded-[2.25rem] border border-slate-200 bg-white p-8 shadow-sm transition hover:-translate-y-1 hover:shadow-md"
+                  >
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <span
+                        className={`rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] ${
+                          device.activation_status === "ACTIVE"
+                            ? "bg-green-100 text-green-700"
+                            : "bg-amber-100 text-amber-700"
+                        }`}
+                      >
+                        {device.activation_status ?? "UNKNOWN"}
+                      </span>
 
-                  <h3 className="mb-3 text-2xl font-black break-all">
-                    {device.device_uuid}
-                  </h3>
-
-                  <div className="space-y-3 text-slate-600">
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <p className="text-sm text-slate-500">Location</p>
-                      <p className="mt-1 text-lg font-bold text-slate-900">
-                        {device.installation_location || "Not assigned"}
-                      </p>
+                      <span className="text-sm font-semibold text-slate-400">
+                        {new Date(device.created_at).toLocaleDateString()}
+                      </span>
                     </div>
 
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <p className="text-sm text-slate-500">Firmware</p>
-                      <p className="mt-1 text-lg font-bold text-slate-900">
-                        {device.firmware_version || "1.0.0"}
-                      </p>
+                    <h3 className="mb-3 break-all text-2xl font-black">
+                      {device.device_uuid}
+                    </h3>
+
+                    <div className="space-y-3 text-slate-600">
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <p className="text-sm text-slate-500">Location</p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">
+                          {device.installation_location || "Not assigned"}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <p className="text-sm text-slate-500">Firmware</p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">
+                          {device.firmware_version || "1.0.0"}
+                        </p>
+                      </div>
+
+                      {isInactive ? (
+                        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                          <p className="text-sm font-semibold uppercase tracking-[0.12em] text-blue-600">
+                            Activation Code
+                          </p>
+                          <p className="mt-2 break-all text-xl font-black text-slate-950">
+                            {code || "Code not found"}
+                          </p>
+                          <p className="mt-2 text-sm text-slate-600">
+                            Use this code to activate the device and unlock live
+                            monitoring.
+                          </p>
+
+                          {code ? (
+                            <div className="mt-4 flex flex-wrap gap-3">
+                              <button
+                                onClick={() => handleCopy(code)}
+                                className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-50"
+                              >
+                                {copiedCode === code ? "Copied" : "Copy Code"}
+                              </button>
+
+                              <Link
+                                href={`/portal/activate?code=${encodeURIComponent(code)}`}
+                                className="rounded-2xl bg-blue-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-blue-700"
+                              >
+                                Activate Now
+                              </Link>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-6 flex flex-wrap gap-3">
+                      <Link
+                        href={`/portal/dashboard?device=${device.id}`}
+                        className="flex-1 rounded-2xl bg-slate-900 px-5 py-4 text-center font-bold text-white transition hover:bg-black"
+                      >
+                        Open Dashboard
+                      </Link>
+
+                      <Link
+                        href="/portal/profile"
+                        className="rounded-2xl border border-slate-300 px-5 py-4 text-center font-bold transition hover:bg-slate-50"
+                      >
+                        Owner
+                      </Link>
                     </div>
                   </div>
-
-                  <div className="mt-6 flex flex-wrap gap-3">
-                    <Link
-                      href={`/portal/dashboard?device=${device.id}`}
-                      className="flex-1 rounded-2xl bg-slate-900 px-5 py-4 text-center font-bold text-white transition hover:bg-black"
-                    >
-                      Open Dashboard
-                    </Link>
-
-                    <Link
-                      href="/portal/profile"
-                      className="rounded-2xl border border-slate-300 px-5 py-4 text-center font-bold transition hover:bg-slate-50"
-                    >
-                      Owner
-                    </Link>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}

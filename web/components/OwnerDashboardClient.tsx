@@ -161,7 +161,12 @@ export default function OwnerDashboardClient({ initialData }: Props) {
         setRefreshing(true);
       }
 
-      const response = await fetch("/api/dashboard", {
+      const deviceId = data.device?.id;
+      const endpoint = deviceId
+        ? `/api/dashboard?device=${encodeURIComponent(deviceId)}`
+        : "/api/dashboard";
+
+      const response = await fetch(endpoint, {
         method: "GET",
         cache: "no-store",
         headers: {
@@ -214,7 +219,7 @@ export default function OwnerDashboardClient({ initialData }: Props) {
         clearInterval(intervalRef.current);
       }
     };
-  }, []);
+  }, [data.device?.id]);
 
   const handleSignOut = async () => {
     try {
@@ -262,6 +267,20 @@ export default function OwnerDashboardClient({ initialData }: Props) {
             >
               {refreshing ? "Refreshing..." : "Refresh"}
             </button>
+
+            <Link
+              href="/portal/devices"
+              className="rounded-2xl border border-slate-300 bg-white px-8 py-4 text-lg font-bold text-slate-900 transition hover:bg-slate-50"
+            >
+              My Devices
+            </Link>
+
+            <Link
+              href="/portal/profile"
+              className="rounded-2xl border border-slate-300 bg-white px-8 py-4 text-lg font-bold text-slate-900 transition hover:bg-slate-50"
+            >
+              Profile
+            </Link>
 
             <Link
               href="/"

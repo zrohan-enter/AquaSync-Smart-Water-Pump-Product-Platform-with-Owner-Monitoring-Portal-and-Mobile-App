@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
 
     const order = orderInsert.data;
 
-    // 5) Create device (NO activation_code here)
+    // 5) Create device (no activation_code here)
     const deviceUuid = generateDeviceUuid();
 
     const deviceInsert = await admin
@@ -241,7 +241,7 @@ export async function POST(request: NextRequest) {
         owner_id: ownerId,
         product_id: productId,
         device_uuid: deviceUuid,
-        activation_status: "PENDING",
+        activation_status: "INACTIVE",
         installation_location: address,
         firmware_version: "1.0.0",
       })

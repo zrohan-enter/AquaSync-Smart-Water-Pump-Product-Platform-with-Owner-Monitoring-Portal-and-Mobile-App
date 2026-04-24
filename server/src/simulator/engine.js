@@ -6,7 +6,12 @@ const simulatorState = {
   deviceUuid: null,
   waterLevelPercent: 57,
   motorStatus: "OFF",
+  tickCount: 0,
 };
+
+const TELEMETRY_KEEP_LIMIT = 500;
+const CLEANUP_EVERY_N_TICKS = 20;
+const SIMULATOR_INTERVAL_MS = 5000;
 
 async function resolveTargetDevice() {
   const { data: device, error } = await supabase
@@ -45,6 +50,7 @@ async function ensureBoundDevice() {
     simulatorState.deviceUuid = latestDevice.device_uuid;
     simulatorState.waterLevelPercent = 57;
     simulatorState.motorStatus = "OFF";
+    simulatorState.tickCount = 0;
 
     console.log(
       `[SIMULATOR] Bound to device ${simulatorState.deviceUuid} (${simulatorState.device_id})`,
@@ -52,6 +58,71 @@ async function ensureBoundDevice() {
   }
 
   return true;
+}
+
+async function insertMotorEventIfChanged(oldStatus, newStatus) {
+  if (oldStatus === newStatus) return;
+
+  const reason =
+    newStatus === "ON"
+      ? "Triggered by low water threshold"
+      : "Triggered by high water threshold";
+
+  const { error } = await supabase.from("motor_events").insert([
+    {
+      device_id: simulatorState.device_id,
+      old_status: oldStatus,
+      new_status: newStatus,
+      reason,
+    },
+  ]);
+
+  if (error) {
+    console.error("[SIMULATOR] Motor event insert failed:", error.message);
+  } else {
+    console.log(
+      `[SIMULATOR] Motor event inserted: ${oldStatus} -> ${newStatus}`,
+    );
+  }
+}
+
+async function cleanupOldTelemetry(deviceId) {
+  try {
+    const { data: rows, error } = await supabase
+      .from("telemetry_logs")
+      .select("id")
+      .eq("device_id", deviceId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[SIMULATOR] Cleanup read failed:", error.message);
+      return;
+    }
+
+    if (!rows || rows.length <= TELEMETRY_KEEP_LIMIT) {
+      return;
+    }
+
+    const idsToDelete = rows.slice(TELEMETRY_KEEP_LIMIT).map((row) => row.id);
+
+    if (idsToDelete.length === 0) return;
+
+    const { error: deleteError } = await supabase
+      .from("telemetry_logs")
+      .delete()
+      .in("id", idsToDelete);
+
+    if (deleteError) {
+      console.error("[SIMULATOR] Cleanup delete failed:", deleteError.message);
+      return;
+    }
+
+    console.log(
+      `[SIMULATOR] Cleanup complete. Deleted ${idsToDelete.length} old telemetry rows.`,
+    );
+  } catch (err) {
+    console.error("[SIMULATOR] Cleanup failed:", err);
+  }
 }
 
 async function startSimulator() {
@@ -68,19 +139,28 @@ async function startSimulator() {
         return;
       }
 
+      const previousMotorStatus = simulatorState.motorStatus;
+
       if (simulatorState.motorStatus === "ON") {
         simulatorState.waterLevelPercent += 5;
+
         if (simulatorState.waterLevelPercent >= 95) {
           simulatorState.waterLevelPercent = 95;
           simulatorState.motorStatus = "OFF";
         }
       } else {
         simulatorState.waterLevelPercent -= 1;
+
         if (simulatorState.waterLevelPercent <= 20) {
           simulatorState.waterLevelPercent = 20;
           simulatorState.motorStatus = "ON";
         }
       }
+
+      await insertMotorEventIfChanged(
+        previousMotorStatus,
+        simulatorState.motorStatus,
+      );
 
       const voltage = Number((220 + Math.random() * 3).toFixed(2));
       const current =
@@ -139,10 +219,16 @@ async function startSimulator() {
       console.log(
         `[CLOUD SYNC] ${simulatorState.deviceUuid} | Level: ${telemetryRow.water_level_percent}% | Motor: ${telemetryRow.motor_status} | Voltage: ${telemetryRow.voltage_v}V`,
       );
+
+      simulatorState.tickCount += 1;
+
+      if (simulatorState.tickCount % CLEANUP_EVERY_N_TICKS === 0) {
+        await cleanupOldTelemetry(simulatorState.device_id);
+      }
     } catch (err) {
       console.error("[SIMULATOR] Loop failed:", err);
     }
-  }, 5000);
+  }, SIMULATOR_INTERVAL_MS);
 }
 
 module.exports = { startSimulator };

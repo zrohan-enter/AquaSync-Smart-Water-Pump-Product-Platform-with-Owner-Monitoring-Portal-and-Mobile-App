@@ -1,26 +1,32 @@
-﻿import Link from "next/link";
+﻿"use client";
 
-type SuccessPageProps = {
-  searchParams: Promise<{
-    product?: string;
-    code?: string;
-    email?: string;
-    device?: string;
-  }>;
-};
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useState } from "react";
 
-export default async function CheckoutSuccessPage({
-  searchParams,
-}: SuccessPageProps) {
-  const params = await searchParams;
+export default function CheckoutSuccessPage() {
+  const searchParams = useSearchParams();
 
-  const product = params.product ?? "AquaSync system";
-  const code = params.code ?? "PENDING-000";
-  const email = params.email ?? null;
-  const deviceUuid = params.device ?? null;
+  const product = searchParams.get("product") ?? "AquaSync system";
+  const code = searchParams.get("code") ?? "Unavailable";
+  const email = searchParams.get("email");
+  const deviceUuid = searchParams.get("device");
+
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch (error) {
+      console.error("Copy failed:", error);
+      alert("Failed to copy activation code.");
+    }
+  }
 
   return (
-    <main className="min-h-screen bg-[#f6f8fc] text-slate-900 px-6 py-20">
+    <main className="min-h-screen bg-[#f6f8fc] px-6 py-20 text-slate-900 md:px-10 lg:px-14">
       <div className="mx-auto w-full max-w-3xl rounded-[2.5rem] border border-slate-200 bg-white p-10 shadow-sm md:p-14">
         <div className="mb-8 flex h-20 w-20 items-center justify-center rounded-full bg-green-100 text-green-600">
           <svg
@@ -59,6 +65,22 @@ export default async function CheckoutSuccessPage({
             </p>
             <div className="break-all text-3xl font-black tracking-wider text-blue-600">
               {code}
+            </div>
+
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button
+                onClick={handleCopy}
+                className="rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-50"
+              >
+                {copied ? "Copied" : "Copy Code"}
+              </button>
+
+              <Link
+                href={`/portal/activate?code=${encodeURIComponent(code)}`}
+                className="rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-blue-700"
+              >
+                Activate Now
+              </Link>
             </div>
           </div>
 
@@ -131,17 +153,17 @@ export default async function CheckoutSuccessPage({
 
         <div className="mt-10 grid gap-4 sm:grid-cols-3">
           <Link
-            href="/portal/activate"
+            href={`/portal/activate?code=${encodeURIComponent(code)}`}
             className="rounded-2xl bg-blue-600 px-6 py-4 text-center font-bold text-white transition hover:bg-blue-700"
           >
             Activate Now
           </Link>
 
           <Link
-            href="/portal/login"
+            href="/portal/devices"
             className="rounded-2xl border border-slate-300 bg-white px-6 py-4 text-center font-bold transition hover:bg-slate-50"
           >
-            Owner Portal
+            View My Devices
           </Link>
 
           <Link
