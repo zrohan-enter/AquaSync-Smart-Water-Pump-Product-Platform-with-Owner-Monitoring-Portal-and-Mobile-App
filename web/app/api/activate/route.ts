@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 
 export async function POST(req: Request) {
   try {
-    const { activationCode, userId } = await req.json();
+    const { activationCode, userId, installationLocation } = await req.json();
 
     if (!activationCode || !activationCode.trim()) {
       return NextResponse.json(
@@ -25,11 +25,13 @@ export async function POST(req: Request) {
     );
 
     const normalizedCode = activationCode.trim().toUpperCase();
+    const safeInstallationLocation =
+      installationLocation?.trim() || "NSU Engineering Lab";
 
     const { data: activation, error: activationError } = await supabase
       .from("device_activations")
       .select(
-        "id, device_id, order_id, activation_code, is_used, assigned_to_user_id",
+        "id, device_id, order_id, activation_code, is_used, assigned_to_user_id, activated_at",
       )
       .eq("activation_code", normalizedCode)
       .single();
@@ -44,7 +46,7 @@ export async function POST(req: Request) {
     const { data: existingDevice, error: existingDeviceError } = await supabase
       .from("devices")
       .select(
-        "id, device_uuid, owner_id, activation_status, installation_location",
+        "id, device_uuid, owner_id, activation_status, installation_location, created_at",
       )
       .eq("id", activation.device_id)
       .single();
@@ -56,28 +58,18 @@ export async function POST(req: Request) {
       );
     }
 
-    // If code already used, only allow success if same user already owns the same device
-    if (activation.is_used) {
-      if (
-        existingDevice.owner_id === userId &&
-        activation.assigned_to_user_id === userId
-      ) {
-        return NextResponse.json({
-          success: true,
-          message: "Device is already activated under your account.",
-          deviceId: existingDevice.id,
-          deviceUuid: existingDevice.device_uuid,
-          orderId: activation.order_id,
-        });
-      }
-
+    // Prevent cross-owner takeover
+    if (
+      activation.is_used &&
+      activation.assigned_to_user_id &&
+      activation.assigned_to_user_id !== userId
+    ) {
       return NextResponse.json(
         { error: "This activation code has already been used." },
         { status: 409 },
       );
     }
 
-    // Prevent cross-owner takeover
     if (existingDevice.owner_id && existingDevice.owner_id !== userId) {
       return NextResponse.json(
         { error: "This device is already linked to another owner account." },
@@ -86,6 +78,57 @@ export async function POST(req: Request) {
     }
 
     const activatedAt = new Date().toISOString();
+
+    // If code already belongs to the same user, self-heal the device row
+    // instead of returning early with a broken INACTIVE / ownerless device.
+    if (activation.is_used) {
+      const { data: repairedDevice, error: repairedDeviceError } =
+        await supabase
+          .from("devices")
+          .update({
+            owner_id: userId,
+            activation_status: "ACTIVE",
+            installation_location:
+              existingDevice.installation_location || safeInstallationLocation,
+          })
+          .eq("id", activation.device_id)
+          .select(
+            "id, device_uuid, owner_id, activation_status, installation_location",
+          )
+          .single();
+
+      if (repairedDeviceError || !repairedDevice) {
+        return NextResponse.json(
+          { error: "Device was already activated, but repair failed." },
+          { status: 500 },
+        );
+      }
+
+      // Ensure activation row also stays correct
+      const { error: repairActivationError } = await supabase
+        .from("device_activations")
+        .update({
+          assigned_to_user_id: userId,
+          activated_at: activation.activated_at || activatedAt,
+          is_used: true,
+        })
+        .eq("id", activation.id);
+
+      if (repairActivationError) {
+        return NextResponse.json(
+          { error: "Device repaired, but activation repair failed." },
+          { status: 500 },
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: "Device is already activated under your account.",
+        deviceId: repairedDevice.id,
+        deviceUuid: repairedDevice.device_uuid,
+        orderId: activation.order_id,
+      });
+    }
 
     const { error: updateActivationError } = await supabase
       .from("device_activations")
@@ -109,7 +152,7 @@ export async function POST(req: Request) {
         activation_status: "ACTIVE",
         owner_id: userId,
         installation_location:
-          existingDevice.installation_location || "NSU Engineering Lab",
+          existingDevice.installation_location || safeInstallationLocation,
       })
       .eq("id", activation.device_id)
       .select(
