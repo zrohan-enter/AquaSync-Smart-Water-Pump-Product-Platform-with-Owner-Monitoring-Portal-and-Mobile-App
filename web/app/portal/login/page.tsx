@@ -1,12 +1,13 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/auth/browser";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { supabaseBrowser } from "@/lib/auth/client";
 
 export default function PortalLoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -14,7 +15,17 @@ export default function PortalLoginPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
-  const supabaseBrowser = createClient();
+  const safeNext = useMemo(() => {
+    const next = searchParams.get("next") || "/portal/dashboard";
+    return next.startsWith("/") ? next : "/portal/dashboard";
+  }, [searchParams]);
+
+  useEffect(() => {
+    const emailFromQuery = searchParams.get("email") || "";
+    if (emailFromQuery) {
+      setEmail(emailFromQuery);
+    }
+  }, [searchParams]);
 
   const handleLogin = async () => {
     try {
@@ -39,12 +50,10 @@ export default function PortalLoginPage() {
         return;
       }
 
-      setSuccessMessage(
-        "Login successful. Redirecting to your owner dashboard...",
-      );
+      setSuccessMessage("Login successful. Redirecting...");
 
       setTimeout(() => {
-        router.push("/portal/dashboard");
+        router.push(safeNext);
         router.refresh();
       }, 700);
     } catch (error) {
@@ -71,7 +80,7 @@ export default function PortalLoginPage() {
           ← Back to Marketing
         </Link>
 
-        <div className="mt-8 mb-10">
+        <div className="mb-10 mt-8">
           <p className="mb-3 text-xs font-black uppercase tracking-widest text-blue-600">
             Secure Access
           </p>
@@ -80,8 +89,14 @@ export default function PortalLoginPage() {
           </h1>
           <p className="text-sm leading-relaxed text-slate-500">
             Sign in to manage your activated AquaSync devices, view live
-            telemetry, check alerts, and control your ownership experience.
+            telemetry, check alerts, and continue your ownership experience.
           </p>
+
+          {searchParams.get("email") ? (
+            <div className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-700">
+              Owner account found. Sign in to continue.
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-4">
@@ -118,7 +133,7 @@ export default function PortalLoginPage() {
             disabled={loading || !email.trim() || !password.trim()}
             className="w-full rounded-2xl bg-slate-900 px-5 py-4 font-black text-white shadow-lg transition hover:bg-black disabled:opacity-50"
           >
-            {loading ? "Authenticating..." : "Sign In to Portal"}
+            {loading ? "Authenticating..." : "Sign In"}
           </button>
         </div>
 
@@ -134,7 +149,7 @@ export default function PortalLoginPage() {
           </div>
         ) : null}
 
-        <div className="mt-10 border-t border-slate-100 pt-8 text-center space-y-3">
+        <div className="mt-10 space-y-3 border-t border-slate-100 pt-8 text-center">
           <Link
             href="/portal/signup"
             className="block text-sm font-bold text-slate-400 transition hover:text-blue-600"

@@ -173,7 +173,7 @@ export async function GET(req: NextRequest) {
       {
         success: true,
         device: activeDevice,
-        devices: ownedDevices,
+        allDevices: ownedDevices,
         latestTelemetry: latestTelemetryResult.data ?? null,
         telemetryHistory: (telemetryHistoryResult.data ?? []).reverse(),
         motorEvents: motorEventsResult.data ?? [],
